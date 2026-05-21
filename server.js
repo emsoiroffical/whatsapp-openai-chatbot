@@ -1,4 +1,5 @@
 import express from 'express';
+// Auto-redeploy trigger
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -66,10 +67,11 @@ async function connectToWhatsApp() {
     console.log(`\n🔄 WhatsApp connection attempt #${retryCount + 1}`);
 
     const authDir = path.join(__dirname, 'auth_info_baileys');
-    if (!fs.existsSync(authDir)) {
-        fs.mkdirSync(authDir, { recursive: true });
+    // Clean old session data to force fresh login on each restart
+    if (fs.existsSync(authDir)) {
+        try { fs.rmSync(authDir, { recursive: true, force: true }); } catch(e) {}
     }
-
+    fs.mkdirSync(authDir, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     let version = [2, 3000, 1015901307];
@@ -152,7 +154,7 @@ async function connectToWhatsApp() {
     });
 
     sock.ev.on('messages.upsert', async (m) => {
-        if (m.type !== 'notify') return;
+        // Process all message.upsert events regardless of type
 
         console.log(`\n📬 Incoming messages.upsert event (count: ${m.messages?.length || 0})`);
 
@@ -215,6 +217,7 @@ async function connectToWhatsApp() {
 
             const senderNumber = from.split('@')[0];
             console.log(`📩 Processing message from [${senderNumber}]: "${messageContent}"`);
+            await sock.sendMessage(from, { text: `✅ Mesaj alındı: ${messageContent}` });
 
             if (!openai) {
                 console.log('Warning: OpenAI client is not initialized. Sending warning message to user.');
