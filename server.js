@@ -146,6 +146,8 @@ async function connectToWhatsApp() {
         console.log(`\n📬 Incoming messages.upsert event (count: ${m.messages?.length || 0})`);
 
         for (const msg of m.messages) {
+            console.log('Raw message object received:', JSON.stringify(msg, null, 2));
+
             if (!msg.message) {
                 console.log('Skipping: Message object is empty.');
                 continue;
