@@ -143,21 +143,57 @@ async function connectToWhatsApp() {
     sock.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify') return;
 
+        console.log(`\n📬 Incoming messages.upsert event (count: ${m.messages?.length || 0})`);
+
         for (const msg of m.messages) {
-            if (!msg.message) continue;
+            if (!msg.message) {
+                console.log('Skipping: Message object is empty.');
+                continue;
+            }
 
             const from = msg.key.remoteJid;
-            if (msg.key.fromMe) continue;
-            if (from.endsWith('@g.us')) continue;
+            const fromMe = msg.key.fromMe;
+            const isGroup = from.endsWith('@g.us');
 
-            const messageContent = msg.message.conversation || 
-                                   msg.message.extendedTextMessage?.text || '';
-            if (!messageContent.trim()) continue;
+            console.log(`Analyzing message from: ${from} | fromMe: ${fromMe} | isGroup: ${isGroup}`);
+
+            if (fromMe) {
+                console.log('Skipping: Message was sent by this bot number (fromMe).');
+                continue;
+            }
+            if (isGroup) {
+                console.log('Skipping: Group message (groups are disabled).');
+                continue;
+            }
+
+            // Extract text from various message structures
+            let messageContent = '';
+            if (msg.message.conversation) {
+                messageContent = msg.message.conversation;
+            } else if (msg.message.extendedTextMessage?.text) {
+                messageContent = msg.message.extendedTextMessage.text;
+            } else if (msg.message.imageMessage?.caption) {
+                messageContent = msg.message.imageMessage.caption;
+            } else if (msg.message.videoMessage?.caption) {
+                messageContent = msg.message.videoMessage.caption;
+            } else if (msg.message.templateButtonReplyMessage?.selectedId) {
+                messageContent = msg.message.templateButtonReplyMessage.selectedId;
+            } else if (msg.message.buttonsResponseMessage?.selectedButtonId) {
+                messageContent = msg.message.buttonsResponseMessage.selectedButtonId;
+            } else if (msg.message.listResponseMessage?.singleSelectReply?.selectedRowId) {
+                messageContent = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+            }
+
+            if (!messageContent.trim()) {
+                console.log('Skipping: Message content is empty or unsupported format.');
+                continue;
+            }
 
             const senderNumber = from.split('@')[0];
-            console.log(`📩 [${senderNumber}]: ${messageContent}`);
+            console.log(`📩 Processing message from [${senderNumber}]: "${messageContent}"`);
 
             if (!openai) {
+                console.log('Warning: OpenAI client is not initialized. Sending warning message to user.');
                 await sock.sendMessage(from, { text: 'Bot aktif ancak OpenAI yapılandırılmamış.' });
                 continue;
             }
@@ -171,6 +207,7 @@ async function connectToWhatsApp() {
                 const systemPrompt = process.env.SYSTEM_PROMPT || 'Sen yardımsever bir yapay zeka asistanısın.';
                 const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
+                console.log(`Calling OpenAI API (${model}) with system prompt and history...`);
                 const response = await openai.chat.completions.create({
                     model,
                     messages: [{ role: 'system', content: systemPrompt }, ...history]
@@ -180,12 +217,20 @@ async function connectToWhatsApp() {
                 if (replyText) {
                     history.push({ role: 'assistant', content: replyText });
                     chatHistories.set(from, history);
+
+                    console.log(`Sending response via WhatsApp to ${from}...`);
                     await sock.sendMessage(from, { text: replyText });
-                    console.log(`📤 [${senderNumber}]: ${replyText.substring(0, 80)}...`);
+                    console.log(`📤 Successfully sent reply to [${senderNumber}]: "${replyText.substring(0, 80)}..."`);
+                } else {
+                    console.log('OpenAI returned an empty response choice.');
                 }
             } catch (err) {
-                console.error('OpenAI error:', err.message);
-                await sock.sendMessage(from, { text: 'Bir hata oluştu, lütfen tekrar deneyin.' });
+                console.error('Error handling message with OpenAI/Baileys:', err);
+                try {
+                    await sock.sendMessage(from, { text: 'Bir hata oluştu, lütfen tekrar deneyin.' });
+                } catch (sendErr) {
+                    console.error('Failed to send error message back to user:', sendErr);
+                }
             }
         }
     });
