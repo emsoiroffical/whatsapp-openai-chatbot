@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp OpenAI Chatbot - Yönetim Paneli</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="background-glow bg-glow-1"></div>
+    <div class="background-glow bg-glow-2"></div>
+
+    <div class="container">
+        <header>
+            <h1>WhatsApp OpenAI Chatbot</h1>
+            <p class="subtitle">Yapay zeka destekli akıllı müşteri temsilcisi paneli</p>
+        </header>
+
+        <main class="glass-card">
+            <!-- Connection Status Header -->
+            <div class="status-header">
+                <div class="status-indicator">
+                    <span class="pulse-dot" id="statusDot"></span>
+                    <span class="status-text" id="statusText">Bağlantı Kontrol Ediliyor...</span>
+                </div>
+                <div class="openai-badge" id="openaiBadge">
+                    <span class="badge-dot"></span>
+                    <span class="badge-text" id="openaiText">OpenAI Yükleniyor...</span>
+                </div>
+            </div>
+
+            <!-- Content Panel -->
+            <div class="content-panel">
+                <!-- QR Code View -->
+                <div class="qr-container" id="qrContainer" style="display: none;">
+                    <div class="qr-wrapper">
+                        <img id="qrImage" src="" alt="WhatsApp QR Code">
+                        <div class="scan-overlay"></div>
+                    </div>
+                    <div class="instructions">
+                        <h3>WhatsApp Bağlantısı Kurun</h3>
+                        <ol>
+                            <li>Telefonunuzda <strong>WhatsApp</strong> uygulamasını açın.</li>
+                            <li><strong>Ayarlar</strong> > <strong>Bağlı Cihazlar</strong> seçeneğine gidin.</li>
+                            <li><strong>Cihaz Bağla</strong> butonuna basıp kamerayı bu ekrana doğrultun.</li>
+                        </ol>
+                    </div>
+                </div>
+
+                <!-- Connecting View -->
+                <div class="loading-container" id="loadingContainer">
+                    <div class="spinner"></div>
+                    <p>Sunucuyla bağlantı kuruluyor ve WhatsApp oturumu başlatılıyor...</p>
+                </div>
+
+                <!-- Connected View -->
+                <div class="success-container" id="successContainer" style="display: none;">
+                    <div class="success-icon-wrapper">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M9 12L11 14L15 10M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h2>WhatsApp Bağlantısı Aktif!</h2>
+                    <p>Sisteminiz başarıyla WhatsApp ağına bağlandı. OpenAI üzerinden gelen mesajlar artık otomatik olarak yanıtlanıyor.</p>
+                    <div class="info-box">
+                        <div class="info-item">
+                            <span class="info-label">Durum:</span>
+                            <span class="info-value text-green">Çalışıyor (7/24)</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Çalışma Modu:</span>
+                            <span class="info-value">Direkt Chat Completion</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Railway & OpenAI Entegrasyon Paneli &copy; 2026</p>
+        </footer>
+    </div>
+
+    <script>
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const openaiBadge = document.getElementById('openaiBadge');
+        const openaiText = document.getElementById('openaiText');
+        
+        const qrContainer = document.getElementById('qrContainer');
+        const qrImage = document.getElementById('qrImage');
+        const loadingContainer = document.getElementById('loadingContainer');
+        const successContainer = document.getElementById('successContainer');
+
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                if (!response.ok) throw new Error('Sunucu hatası');
+                const data = await response.json();
+
+                // OpenAI Badge status
+                if (data.hasOpenAI) {
+                    openaiBadge.className = 'openai-badge active';
+                    openaiText.textContent = 'OpenAI Aktif';
+                } else {
+                    openaiBadge.className = 'openai-badge inactive';
+                    openaiText.textContent = 'OpenAI Yapılandırılmadı';
+                }
+
+                // Connection State handling
+                if (data.state === 'connecting') {
+                    statusDot.className = 'pulse-dot yellow';
+                    statusText.textContent = 'WhatsApp Oturumu Açılıyor...';
+                    
+                    loadingContainer.style.display = 'flex';
+                    qrContainer.style.display = 'none';
+                    successContainer.style.display = 'none';
+                } else if (data.state === 'qr') {
+                    statusDot.className = 'pulse-dot blue';
+                    statusText.textContent = 'QR Kod Taranması Bekleniyor';
+
+                    if (data.qr) {
+                        qrImage.src = data.qr;
+                        qrContainer.style.display = 'flex';
+                        loadingContainer.style.display = 'none';
+                        successContainer.style.display = 'none';
+                    } else {
+                        loadingContainer.style.display = 'flex';
+                        qrContainer.style.display = 'none';
+                        successContainer.style.display = 'none';
+                    }
+                } else if (data.state === 'connected') {
+                    statusDot.className = 'pulse-dot green';
+                    statusText.textContent = 'Bağlandı';
+
+                    successContainer.style.display = 'flex';
+                    loadingContainer.style.display = 'none';
+                    qrContainer.style.display = 'none';
+                } else {
+                    statusDot.className = 'pulse-dot red';
+                    statusText.textContent = 'Bağlantı Kesildi';
+
+                    loadingContainer.style.display = 'flex';
+                    qrContainer.style.display = 'none';
+                    successContainer.style.display = 'none';
+                }
+            } catch (err) {
+                statusDot.className = 'pulse-dot red';
+                statusText.textContent = 'Sunucu Bağlantı Hatası';
+                openaiBadge.className = 'openai-badge inactive';
+                openaiText.textContent = 'Bilinmiyor';
+                
+                loadingContainer.style.display = 'flex';
+                qrContainer.style.display = 'none';
+                successContainer.style.display = 'none';
+            }
+        }
+
+        // Poll API every 2.5 seconds
+        setInterval(updateStatus, 2500);
+        updateStatus();
+    </script>
+</body>
+</html>
