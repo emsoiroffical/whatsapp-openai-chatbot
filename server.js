@@ -52,6 +52,16 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Helper to extract message content from wrappers like ephemeralMessage, viewOnceMessage, etc.
+function getRealMessage(message) {
+    if (!message) return null;
+    if (message.ephemeralMessage?.message) return getRealMessage(message.ephemeralMessage.message);
+    if (message.viewOnceMessage?.message) return getRealMessage(message.viewOnceMessage.message);
+    if (message.viewOnceMessageV2?.message) return getRealMessage(message.viewOnceMessageV2.message);
+    if (message.documentWithCaptionMessage?.message) return getRealMessage(message.documentWithCaptionMessage.message);
+    return message;
+}
+
 async function connectToWhatsApp() {
     console.log(`\n🔄 WhatsApp connection attempt #${retryCount + 1}`);
 
@@ -134,6 +144,7 @@ async function connectToWhatsApp() {
 
         } else if (connection === 'open') {
             console.log('✅ WhatsApp connected!');
+            console.log('🤖 Connected Bot Account User JID:', sock.user?.id || 'Unknown');
             connectionState = 'connected';
             qrCodeBase64 = null;
             retryCount = 0;
@@ -148,8 +159,19 @@ async function connectToWhatsApp() {
         for (const msg of m.messages) {
             console.log('Raw message object received:', JSON.stringify(msg, null, 2));
 
-            if (!msg.message) {
-                console.log('Skipping: Message object is empty.');
+            const timestamp = msg.messageTimestamp;
+            if (timestamp) {
+                const now = Math.floor(Date.now() / 1000);
+                const age = now - timestamp;
+                if (age > 60) {
+                    console.log(`Skipping: Message is too old (${age}s ago, likely a history/sync message).`);
+                    continue;
+                }
+            }
+
+            const realMessage = getRealMessage(msg.message);
+            if (!realMessage) {
+                console.log('Skipping: Message payload is empty or only system notification.');
                 continue;
             }
 
@@ -170,20 +192,20 @@ async function connectToWhatsApp() {
 
             // Extract text from various message structures
             let messageContent = '';
-            if (msg.message.conversation) {
-                messageContent = msg.message.conversation;
-            } else if (msg.message.extendedTextMessage?.text) {
-                messageContent = msg.message.extendedTextMessage.text;
-            } else if (msg.message.imageMessage?.caption) {
-                messageContent = msg.message.imageMessage.caption;
-            } else if (msg.message.videoMessage?.caption) {
-                messageContent = msg.message.videoMessage.caption;
-            } else if (msg.message.templateButtonReplyMessage?.selectedId) {
-                messageContent = msg.message.templateButtonReplyMessage.selectedId;
-            } else if (msg.message.buttonsResponseMessage?.selectedButtonId) {
-                messageContent = msg.message.buttonsResponseMessage.selectedButtonId;
-            } else if (msg.message.listResponseMessage?.singleSelectReply?.selectedRowId) {
-                messageContent = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+            if (realMessage.conversation) {
+                messageContent = realMessage.conversation;
+            } else if (realMessage.extendedTextMessage?.text) {
+                messageContent = realMessage.extendedTextMessage.text;
+            } else if (realMessage.imageMessage?.caption) {
+                messageContent = realMessage.imageMessage.caption;
+            } else if (realMessage.videoMessage?.caption) {
+                messageContent = realMessage.videoMessage.caption;
+            } else if (realMessage.templateButtonReplyMessage?.selectedId) {
+                messageContent = realMessage.templateButtonReplyMessage.selectedId;
+            } else if (realMessage.buttonsResponseMessage?.selectedButtonId) {
+                messageContent = realMessage.buttonsResponseMessage.selectedButtonId;
+            } else if (realMessage.listResponseMessage?.singleSelectReply?.selectedRowId) {
+                messageContent = realMessage.listResponseMessage.singleSelectReply.selectedRowId;
             }
 
             if (!messageContent.trim()) {
