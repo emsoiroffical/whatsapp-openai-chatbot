@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <title>WhatsApp Bağlantı QR</title>
+  <style>
+    body {font-family: 'Inter', sans-serif; background:#111; color:#eee; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; margin:0;}
+    .qr {margin:20px;}
+    .status {margin-top:10px; font-size:1.2rem;}
+    .msg {padding:5px 10px; border-radius:4px; background:#222; margin-top:5px;}
+  </style>
+</head>
+<body>
+  <h1>WhatsApp Bağlantısı</h1>
+  <div class="qr">
+    <img id="qrImg" src="/api/qr" alt="QR kodu" style="max-width:90vw; height:auto;" />
+  </div>
+  <div class="status" id="statusMsg">QR kodu oluşturuluyor…</div>
+  <script>
+    async function fetchStatus(){
+      try{
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const msgEl = document.getElementById('statusMsg');
+        if(data.state === 'qr'){
+          msgEl.textContent = '📲 QR kodu taratılıyor, lütfen taratın…';
+        } else if(data.state === 'connected'){
+          msgEl.textContent = '✅ Bağlandı! WhatsApp botunuz hazır.';
+          document.getElementById('qrImg').style.display='none';
+        } else if(data.state === 'connecting'){
+          msgEl.textContent = '🔄 Bağlanmaya çalışıyor…';
+        } else if(data.state === 'disconnected'){
+          msgEl.textContent = '❌ Bağlantı kesildi. Tekrar QR oluşturuluyor…';
+          // force reload of QR image
+          document.getElementById('qrImg').src = '/api/qr?' + Date.now();
+        } else {
+          msgEl.textContent = 'Durum: ' + data.state;
+        }
+      }catch(e){
+        console.error(e);
+      }
+    }
+    // poll every 3 seconds
+    setInterval(fetchStatus, 3000);
+    fetchStatus();
+  </script>
+</body>
+</html>

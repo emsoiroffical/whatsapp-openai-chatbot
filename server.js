@@ -17,10 +17,12 @@ import {
     fetchLatestBaileysVersion
 } from '@whiskeysockets/baileys';
 
-dotenv.config();
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// Load centralized credentials
+dotenv.config({ path: path.resolve(__dirname, '../../_knowledge/credentials/master.env') });
 
 const app = express();
 const server = http.createServer(app);
@@ -41,6 +43,8 @@ let qrCodeBase64 = null;
 let sock = null;
 let retryCount = 0;
 const MAX_RETRIES = 15;
+// Flag to ensure QR is printed only once per session
+let qrDisplayed = false;
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
@@ -49,8 +53,38 @@ app.get('/api/status', (req, res) => {
     res.json({ state: connectionState, qr: qrCodeBase64, hasOpenAI: !!openai });
 });
 
+app.get('/api/qr', (req, res) => {
+    if (qrCodeBase64) {
+        const img = Buffer.from(qrCodeBase64.split(',')[1], 'base64');
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        res.end(img);
+    } else {
+        res.status(404).send('QR not available');
+    }
+});
+
+// Public route for QR image (clean PNG)
+app.get('/whatsapp-qr', (req, res) => {
+  if (qrCodeBase64) {
+    const img = Buffer.from(qrCodeBase64.split(',')[1], 'base64');
+    res.type('png').send(img);
+  } else {
+    res.status(404).send('QR not available');
+  }
+});
+
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Simple HTML page showing QR image directly
+app.get('/qr', (req, res) => {
+    if (qrCodeBase64) {
+        const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;background:#111;color:#fff;"><img src="/api/qr" alt="WhatsApp QR" style="max-width:90%;height:auto;"/></body></html>`;
+        res.send(html);
+    } else {
+        res.send('<p>QR kodu mevcut değil. Lütfen bağlanma aşamasını bekleyin.</p>');
+    }
 });
 
 // Helper to extract message content from wrappers like ephemeralMessage, viewOnceMessage, etc.
@@ -67,11 +101,17 @@ async function connectToWhatsApp() {
     console.log(`\n🔄 WhatsApp connection attempt #${retryCount + 1}`);
 
     const authDir = path.join(__dirname, 'auth_info_baileys');
-    // Clean old session data to force fresh login on each restart
-    if (fs.existsSync(authDir)) {
-        try { fs.rmSync(authDir, { recursive: true, force: true }); } catch(e) {}
+    // Ensure auth directory exists; preserve existing session for persistent login
+    try {
+        if (!fs.existsSync(authDir)) {
+            fs.mkdirSync(authDir, { recursive: true });
+            console.log(`Auth directory created at ${authDir}`);
+        } else {
+            console.log(`Using existing auth directory at ${authDir}`);
+        }
+    } catch (e) {
+        console.error('Failed to ensure auth directory:', e);
     }
-    fs.mkdirSync(authDir, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     let version = [2, 3000, 1015901307];
@@ -90,16 +130,18 @@ async function connectToWhatsApp() {
         version,
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: 'silent' }),
+        logger: pino({ level: 'debug' }),
         browser: Browsers.macOS('Safari'),
-        connectTimeoutMs: 90_000,
-        defaultQueryTimeoutMs: 90_000,
+        connectTimeoutMs: 180_000,
+        defaultQueryTimeoutMs: 180_000,
         keepAliveIntervalMs: 25_000,
         retryRequestDelayMs: 2000,
         maxMsgRetryCount: 5,
         syncFullHistory: false,
         markOnlineOnConnect: true,
         generateHighQualityLinkPreview: false,
+        // Disable QR timeout to allow indefinite scanning period
+        qrTimeout: 0,
         getMessage: async () => undefined,
     });
 
@@ -108,7 +150,8 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        if (qr) {
+        // Generate QR only once per session to keep it static
+        if (qr && !qrCodeBase64 && !qrDisplayed) {
             retryCount = 0;
             connectionState = 'qr';
             console.log('\n--- SCAN THIS QR CODE ---');
@@ -116,6 +159,12 @@ async function connectToWhatsApp() {
             console.log('-------------------------\n');
             try {
                 qrCodeBase64 = await qrcode.toDataURL(qr, { scale: 8, margin: 2 });
+                // Save QR PNG to public folder for direct access
+                const imgBuffer = Buffer.from(qrCodeBase64.split(',')[1], 'base64');
+                const qrFilePath = path.join(__dirname, 'public', 'qr.png');
+                fs.writeFileSync(qrFilePath, imgBuffer);
+                console.log('QR image saved to', qrFilePath);
+                qrDisplayed = true; // Mark that QR has been shown
             } catch (err) {
                 console.error('QR error:', err);
             }
@@ -125,30 +174,29 @@ async function connectToWhatsApp() {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
             const reason = lastDisconnect?.error?.message || 'Unknown';
-
-            console.log(`❌ Connection closed. Code: ${statusCode} | Reason: ${reason}`);
-            connectionState = 'disconnected';
-            qrCodeBase64 = null;
-
+            console.log(`⚠️ Bağlantı kapandı: ${reason} (code ${statusCode})`);
             if (isLoggedOut) {
-                console.log('Logged out — clearing session...');
-                try { fs.rmSync(authDir, { recursive: true, force: true }); } catch(e) {}
-                retryCount = 0;
+                console.log('Çıkış yapıldı, oturum dosyaları temizleniyor.');
+                fs.rmSync(authDir, { recursive: true, force: true });
+                connectionState = 'disconnected';
+                // Do not exit, allow user to scan QR again
                 setTimeout(connectToWhatsApp, 3000);
-            } else if (retryCount < MAX_RETRIES) {
-                retryCount++;
-                const delay = Math.min(5000 * retryCount, 30000);
-                console.log(`⏳ Retry ${retryCount}/${MAX_RETRIES} in ${delay/1000}s...`);
-                setTimeout(connectToWhatsApp, delay);
             } else {
-                console.error('🚨 Max retries reached. Railway IP may be blocked by WhatsApp.');
+                if (retryCount < MAX_RETRIES) {
+                    retryCount++;
+                    console.log(`Yeniden bağlanma denemesi ${retryCount}/${MAX_RETRIES}`);
+                    connectionState = 'connecting';
+                    setTimeout(connectToWhatsApp, 3000);
+                } else {
+                    console.log('Maksimum yeniden bağlanma denemesi aşıldı. Bağlantı kesildi.');
+                    connectionState = 'disconnected';
+                }
             }
-
         } else if (connection === 'open') {
             console.log('✅ WhatsApp connected!');
-            console.log('🤖 Connected Bot Account User JID:', sock.user?.id || 'Unknown');
             connectionState = 'connected';
             qrCodeBase64 = null;
+            qrDisplayed = false; // Reset flag for next session
             retryCount = 0;
         }
     });
