@@ -54,7 +54,7 @@ app.get('/qr', (req, res) => {
     <html>
     <head>
       <title>WhatsApp QR</title>
-      <meta http-equiv="refresh" content="15">
+
       <style>
         body {
           margin:0;
@@ -103,6 +103,7 @@ setInterval(() => {
 
 async function startWhatsApp() {
     console.log(`\n🔄 WhatsApp connection attempt`);
+    let qrGenerated = false;
 
     const authDir = path.join(__dirname, 'auth_info_baileys');
     if (!fs.existsSync(authDir)) {
@@ -170,12 +171,11 @@ async function startWhatsApp() {
             console.log("🔐 New login detected");
         }
 
-        if (update.qr) {
+        if (update.qr && !qrGenerated) {
+            qrGenerated = true;
             qrCodeBase64 = await QRCode.toDataURL(update.qr);
-            console.log('QR code refreshed.');
-            console.log('--- SCAN THIS QR CODE ---');
+            console.log('QR code generated - STABLE, will not change.');
             qrcodeTerminal.generate(update.qr, { small: true });
-            console.log('-------------------------\n');
         }
 
         if (connection === 'close') {
