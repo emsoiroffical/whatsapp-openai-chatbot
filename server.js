@@ -1,5 +1,4 @@
 import express from 'express';
-// Auto-redeploy trigger
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -8,21 +7,20 @@ import dotenv from 'dotenv';
 import pino from 'pino';
 import { OpenAI } from 'openai';
 import qrcode from 'qrcode';
+const QRCode = qrcode;
 import qrcodeTerminal from 'qrcode-terminal';
-import { 
-    makeWASocket, 
-    useMultiFileAuthState, 
+import {
+    makeWASocket,
+    useMultiFileAuthState,
     DisconnectReason,
     Browsers,
     fetchLatestBaileysVersion
 } from '@whiskeysockets/baileys';
 
-
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Load centralized credentials
-dotenv.config({ path: path.resolve(__dirname, '../../_knowledge/credentials/master.env') });
 
 const app = express();
 const server = http.createServer(app);
@@ -40,77 +38,94 @@ const chatHistories = new Map();
 
 let connectionState = 'disconnected';
 let qrCodeBase64 = null;
+// let latestQrCode = null;  // removed – QR is refreshed on every event
 let sock = null;
-let retryCount = 0;
-const MAX_RETRIES = 15;
-// Flag to ensure QR is printed only once per session
-let qrDisplayed = false;
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
+app.get('/qr', (req, res) => {
+  if (!qrCodeBase64) {
+    return res.send("QR henüz hazır değil. Server logunu kontrol edin.");
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>WhatsApp QR</title>
+      <meta http-equiv="refresh" content="15">
+      <style>
+        body {
+          margin:0;
+          height:100vh;
+          display:flex;
+          justify-content:center;
+          align-items:center;
+          background:#111;
+          font-family:Arial;
+        }
+        .box {
+          background:white;
+          padding:30px;
+          border-radius:24px;
+          text-align:center;
+        }
+        img {
+          width:360px;
+          height:360px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="box">
+        <h2>WhatsApp Business Bağlantısı</h2>
+        <p>QR her 15 saniyede güncellenir, telefonu hazır tutun.</p>
+        <img src="${qrCodeBase64}" />
+      </div>
+    </body>
+    </html>
+  `);
+});
+
 app.get('/api/status', (req, res) => {
     res.json({ state: connectionState, qr: qrCodeBase64, hasOpenAI: !!openai });
-});
-
-app.get('/api/qr', (req, res) => {
-    if (qrCodeBase64) {
-        const img = Buffer.from(qrCodeBase64.split(',')[1], 'base64');
-        res.writeHead(200, { 'Content-Type': 'image/png' });
-        res.end(img);
-    } else {
-        res.status(404).send('QR not available');
-    }
-});
-
-// Public route for QR image (clean PNG)
-app.get('/whatsapp-qr', (req, res) => {
-  if (qrCodeBase64) {
-    const img = Buffer.from(qrCodeBase64.split(',')[1], 'base64');
-    res.type('png').send(img);
-  } else {
-    res.status(404).send('QR not available');
-  }
 });
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Simple HTML page showing QR image directly
-app.get('/qr', (req, res) => {
-    if (qrCodeBase64) {
-        const html = `<html><body style="display:flex;justify-content:center;align-items:center;height:100vh;background:#111;color:#fff;"><img src="/api/qr" alt="WhatsApp QR" style="max-width:90%;height:auto;"/></body></html>`;
-        res.send(html);
-    } else {
-        res.send('<p>QR kodu mevcut değil. Lütfen bağlanma aşamasını bekleyin.</p>');
-    }
-});
+// Server Heartbeat (5 saniyede bir durum basar)
+setInterval(() => {
+  console.log("SERVER HEARTBEAT", new Date().toISOString(), "state:", connectionState);
+}, 5000);
 
-// Helper to extract message content from wrappers like ephemeralMessage, viewOnceMessage, etc.
-function getRealMessage(message) {
-    if (!message) return null;
-    if (message.ephemeralMessage?.message) return getRealMessage(message.ephemeralMessage.message);
-    if (message.viewOnceMessage?.message) return getRealMessage(message.viewOnceMessage.message);
-    if (message.viewOnceMessageV2?.message) return getRealMessage(message.viewOnceMessageV2.message);
-    if (message.documentWithCaptionMessage?.message) return getRealMessage(message.documentWithCaptionMessage.message);
-    return message;
-}
-
-async function connectToWhatsApp() {
-    console.log(`\n🔄 WhatsApp connection attempt #${retryCount + 1}`);
+async function startWhatsApp() {
+    console.log(`\n🔄 WhatsApp connection attempt`);
 
     const authDir = path.join(__dirname, 'auth_info_baileys');
-    // Ensure auth directory exists; preserve existing session for persistent login
-    try {
-        if (!fs.existsSync(authDir)) {
-            fs.mkdirSync(authDir, { recursive: true });
-            console.log(`Auth directory created at ${authDir}`);
-        } else {
-            console.log(`Using existing auth directory at ${authDir}`);
+    if (!fs.existsSync(authDir)) {
+        fs.mkdirSync(authDir, { recursive: true });
+    }
+
+    // If a SESSION_DATA env var exists, restore auth files from it
+    if (process.env.SESSION_DATA) {
+        try {
+            const decoded = Buffer.from(process.env.SESSION_DATA, 'base64').toString('utf-8');
+            const sessionObj = JSON.parse(decoded);
+            // Ensure auth directory exists
+            if (!fs.existsSync(authDir)) {
+                fs.mkdirSync(authDir, { recursive: true });
+            }
+            for (const [filename, fileContent] of Object.entries(sessionObj)) {
+                const filePath = path.join(authDir, filename);
+                fs.writeFileSync(filePath, fileContent, 'utf-8');
+            }
+            console.log('✅ Restored Baileys auth session from SESSION_DATA');
+        } catch (e) {
+            console.error('⚠️ Failed to restore SESSION_DATA:', e);
         }
-    } catch (e) {
-        console.error('Failed to ensure auth directory:', e);
     }
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
@@ -129,146 +144,88 @@ async function connectToWhatsApp() {
     sock = makeWASocket({
         version,
         auth: state,
+        logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        logger: pino({ level: 'debug' }),
-        browser: Browsers.macOS('Safari'),
-        connectTimeoutMs: 180_000,
-        defaultQueryTimeoutMs: 180_000,
-        keepAliveIntervalMs: 25_000,
-        retryRequestDelayMs: 2000,
-        maxMsgRetryCount: 5,
+        browser: Browsers.ubuntu('Chrome'),
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000,
         syncFullHistory: false,
-        markOnlineOnConnect: true,
-        generateHighQualityLinkPreview: false,
-        // Disable QR timeout to allow indefinite scanning period
-        qrTimeout: 0,
-        getMessage: async () => undefined,
+        getMessage: async () => undefined
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, lastDisconnect } = update;
 
-        // Generate QR only once per session to keep it static
-        if (qr && !qrCodeBase64 && !qrDisplayed) {
-            retryCount = 0;
-            connectionState = 'qr';
-            console.log('\n--- SCAN THIS QR CODE ---');
-            qrcodeTerminal.generate(qr, { small: true });
+        console.log("CONNECTION UPDATE RAW:", JSON.stringify(update, null, 2));
+        console.log("CONNECTION STATE:", update.connection);
+        console.log("LAST DISCONNECT RAW:", JSON.stringify(update.lastDisconnect, null, 2));
+        console.log("LAST DISCONNECT STATUS:", update.lastDisconnect?.error?.output?.statusCode);
+        console.log("LAST DISCONNECT MESSAGE:", update.lastDisconnect?.error?.message);
+
+        if (update.qr) {
+            qrCodeBase64 = await QRCode.toDataURL(update.qr);
+            console.log('QR code refreshed.');
+            console.log('--- SCAN THIS QR CODE ---');
+            qrcodeTerminal.generate(update.qr, { small: true });
             console.log('-------------------------\n');
-            try {
-                qrCodeBase64 = await qrcode.toDataURL(qr, { scale: 8, margin: 2 });
-                // Save QR PNG to public folder for direct access
-                const imgBuffer = Buffer.from(qrCodeBase64.split(',')[1], 'base64');
-                const qrFilePath = path.join(__dirname, 'public', 'qr.png');
-                fs.writeFileSync(qrFilePath, imgBuffer);
-                console.log('QR image saved to', qrFilePath);
-                qrDisplayed = true; // Mark that QR has been shown
-            } catch (err) {
-                console.error('QR error:', err);
-            }
         }
 
         if (connection === 'close') {
+            console.log(`❌ Connection closed.`);
+            connectionState = 'disconnected';
+            qrCodeBase64 = null;
+            // latestQrCode cleared implicitly – variable removed
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-            const reason = lastDisconnect?.error?.message || 'Unknown';
-            console.log(`⚠️ Bağlantı kapandı: ${reason} (code ${statusCode})`);
-            if (isLoggedOut) {
-                console.log('Çıkış yapıldı, oturum dosyaları temizleniyor.');
-                fs.rmSync(authDir, { recursive: true, force: true });
-                connectionState = 'disconnected';
-                // Do not exit, allow user to scan QR again
-                setTimeout(connectToWhatsApp, 3000);
-            } else {
-                if (retryCount < MAX_RETRIES) {
-                    retryCount++;
-                    console.log(`Yeniden bağlanma denemesi ${retryCount}/${MAX_RETRIES}`);
-                    connectionState = 'connecting';
-                    setTimeout(connectToWhatsApp, 3000);
-                } else {
-                    console.log('Maksimum yeniden bağlanma denemesi aşıldı. Bağlantı kesildi.');
-                    connectionState = 'disconnected';
-                }
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log('Reconnecting:', shouldReconnect, 'Status:', statusCode);
+            if (shouldReconnect) {
+                setTimeout(() => startWhatsApp(), 3000);
             }
         } else if (connection === 'open') {
             console.log('✅ WhatsApp connected!');
             connectionState = 'connected';
             qrCodeBase64 = null;
-            qrDisplayed = false; // Reset flag for next session
-            retryCount = 0;
+            // Save current auth files into SESSION_DATA env variable (base64)
+            try {
+                const files = fs.readdirSync(authDir);
+                const sessionObj = {};
+                for (const file of files) {
+                    const filePath = path.join(authDir, file);
+                    const data = fs.readFileSync(filePath, 'utf-8');
+                    sessionObj[file] = data;
+                }
+                const jsonStr = JSON.stringify(sessionObj);
+                const encoded = Buffer.from(jsonStr, 'utf-8').toString('base64');
+                process.env.SESSION_DATA = encoded;
+                console.log('✅ Saved Baileys auth session to SESSION_DATA (env var)');
+            } catch (e) {
+                console.error('⚠️ Failed to save SESSION_DATA:', e);
+            }
+            latestQrCode = null;
         }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
-        // Process all message.upsert events regardless of type
-
-        console.log(`\n📬 Incoming messages.upsert event (count: ${m.messages?.length || 0})`);
+        if (m.type !== 'notify') return;
 
         for (const msg of m.messages) {
-            console.log('Raw message object received:', JSON.stringify(msg, null, 2));
-
-            const timestamp = msg.messageTimestamp;
-            if (timestamp) {
-                const now = Math.floor(Date.now() / 1000);
-                const age = now - timestamp;
-                if (age > 60) {
-                    console.log(`Skipping: Message is too old (${age}s ago, likely a history/sync message).`);
-                    continue;
-                }
-            }
-
-            const realMessage = getRealMessage(msg.message);
-            if (!realMessage) {
-                console.log('Skipping: Message payload is empty or only system notification.');
-                continue;
-            }
+            if (!msg.message) continue;
 
             const from = msg.key.remoteJid;
-            const fromMe = msg.key.fromMe;
-            const isGroup = from.endsWith('@g.us');
+            if (msg.key.fromMe) continue;
+            if (from.endsWith('@g.us')) continue;
 
-            console.log(`Analyzing message from: ${from} | fromMe: ${fromMe} | isGroup: ${isGroup}`);
-
-            if (fromMe) {
-                console.log('Skipping: Message was sent by this bot number (fromMe).');
-                continue;
-            }
-            if (isGroup) {
-                console.log('Skipping: Group message (groups are disabled).');
-                continue;
-            }
-
-            // Extract text from various message structures
-            let messageContent = '';
-            if (realMessage.conversation) {
-                messageContent = realMessage.conversation;
-            } else if (realMessage.extendedTextMessage?.text) {
-                messageContent = realMessage.extendedTextMessage.text;
-            } else if (realMessage.imageMessage?.caption) {
-                messageContent = realMessage.imageMessage.caption;
-            } else if (realMessage.videoMessage?.caption) {
-                messageContent = realMessage.videoMessage.caption;
-            } else if (realMessage.templateButtonReplyMessage?.selectedId) {
-                messageContent = realMessage.templateButtonReplyMessage.selectedId;
-            } else if (realMessage.buttonsResponseMessage?.selectedButtonId) {
-                messageContent = realMessage.buttonsResponseMessage.selectedButtonId;
-            } else if (realMessage.listResponseMessage?.singleSelectReply?.selectedRowId) {
-                messageContent = realMessage.listResponseMessage.singleSelectReply.selectedRowId;
-            }
-
-            if (!messageContent.trim()) {
-                console.log('Skipping: Message content is empty or unsupported format.');
-                continue;
-            }
+            const messageContent = msg.message.conversation ||
+                                   msg.message.extendedTextMessage?.text || '';
+            if (!messageContent.trim()) continue;
 
             const senderNumber = from.split('@')[0];
-            console.log(`📩 Processing message from [${senderNumber}]: "${messageContent}"`);
-            await sock.sendMessage(from, { text: `✅ Mesaj alındı: ${messageContent}` });
+            console.log(`📩 [${senderNumber}]: ${messageContent}`);
 
             if (!openai) {
-                console.log('Warning: OpenAI client is not initialized. Sending warning message to user.');
                 await sock.sendMessage(from, { text: 'Bot aktif ancak OpenAI yapılandırılmamış.' });
                 continue;
             }
@@ -282,7 +239,6 @@ async function connectToWhatsApp() {
                 const systemPrompt = process.env.SYSTEM_PROMPT || 'Sen yardımsever bir yapay zeka asistanısın.';
                 const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-                console.log(`Calling OpenAI API (${model}) with system prompt and history...`);
                 const response = await openai.chat.completions.create({
                     model,
                     messages: [{ role: 'system', content: systemPrompt }, ...history]
@@ -292,20 +248,12 @@ async function connectToWhatsApp() {
                 if (replyText) {
                     history.push({ role: 'assistant', content: replyText });
                     chatHistories.set(from, history);
-
-                    console.log(`Sending response via WhatsApp to ${from}...`);
                     await sock.sendMessage(from, { text: replyText });
-                    console.log(`📤 Successfully sent reply to [${senderNumber}]: "${replyText.substring(0, 80)}..."`);
-                } else {
-                    console.log('OpenAI returned an empty response choice.');
+                    console.log(`📤 [${senderNumber}]: ${replyText.substring(0, 80)}...`);
                 }
             } catch (err) {
-                console.error('Error handling message with OpenAI/Baileys:', err);
-                try {
-                    await sock.sendMessage(from, { text: 'Bir hata oluştu, lütfen tekrar deneyin.' });
-                } catch (sendErr) {
-                    console.error('Failed to send error message back to user:', sendErr);
-                }
+                console.error('OpenAI error:', err.message);
+                await sock.sendMessage(from, { text: 'Bir hata oluştu, lütfen tekrar deneyin.' });
             }
         }
     });
@@ -316,5 +264,5 @@ server.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🌐 Web panel: http://localhost:${PORT}`);
     console.log(`==============================================\n`);
-    connectToWhatsApp().catch(err => console.error('Fatal error:', err));
+    startWhatsApp().catch(err => console.error('Fatal error:', err));
 });
