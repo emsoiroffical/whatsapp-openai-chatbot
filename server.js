@@ -129,7 +129,7 @@ async function startWhatsApp() {
     }
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    const version = [2, 3000, 1015901307];
+    const version = [2, 3000, 1035194821];
 
     connectionState = 'connecting';
     qrCodeBase64 = null;
