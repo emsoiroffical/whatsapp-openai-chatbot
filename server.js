@@ -129,14 +129,7 @@ async function startWhatsApp() {
     }
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    let version = [2, 3000, 1015901307];
-    try {
-        const result = await fetchLatestBaileysVersion();
-        version = result.version;
-        console.log(`Using WA v${version.join('.')}`);
-    } catch(e) {
-        console.log(`Using fallback WA version: ${version.join('.')}`);
-    }
+    const version = [2, 3000, 1015901307];
 
     connectionState = 'connecting';
     qrCodeBase64 = null;
@@ -146,12 +139,16 @@ async function startWhatsApp() {
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: Browsers.ubuntu('Chrome'),
+        browser: Browsers.macOS('Safari'),
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 10000,
+        keepAliveIntervalMs: 25000,
+        retryRequestDelayMs: 250,
+        maxMsgRetryCount: 5,
         syncFullHistory: false,
-        getMessage: async () => undefined
+        markOnlineOnConnect: false,
+        fireInitQueries: false,
+        getMessage: async () => ({ conversation: '' })
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -164,6 +161,9 @@ async function startWhatsApp() {
         console.log("LAST DISCONNECT RAW:", JSON.stringify(update.lastDisconnect, null, 2));
         console.log("LAST DISCONNECT STATUS:", update.lastDisconnect?.error?.output?.statusCode);
         console.log("LAST DISCONNECT MESSAGE:", update.lastDisconnect?.error?.message);
+        if (update.isNewLogin) {
+            console.log("🔐 New login detected");
+        }
 
         if (update.qr) {
             qrCodeBase64 = await QRCode.toDataURL(update.qr);
