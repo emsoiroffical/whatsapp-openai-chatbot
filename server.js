@@ -129,7 +129,15 @@ async function startWhatsApp() {
     }
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    const version = [2, 3000, 1035194821];
+    let version;
+    try {
+        const result = await fetchLatestBaileysVersion();
+        version = result.version;
+        console.log(`Using WA v${version.join('.')}`);
+    } catch(e) {
+        version = [2, 3000, 1035194821];
+        console.log(`Using fallback WA version`);
+    }
 
     connectionState = 'connecting';
     qrCodeBase64 = null;
@@ -139,15 +147,12 @@ async function startWhatsApp() {
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: Browsers.macOS('Safari'),
+        browser: Browsers.ubuntu('Chrome'),
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 25000,
-        retryRequestDelayMs: 250,
-        maxMsgRetryCount: 5,
+        keepAliveIntervalMs: 30000,
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        fireInitQueries: false,
         getMessage: async () => ({ conversation: '' })
     });
 
