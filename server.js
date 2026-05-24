@@ -209,7 +209,8 @@ async function startWhatsApp() {
     });
 
     sock.ev.on('messages.upsert', async (m) => {
-        if (m.type !== 'notify') return;
+        console.log('📨 RAW MESSAGE EVENT:', JSON.stringify(m, null, 2));
+    if (m.type !== 'notify') return;
 
         for (const msg of m.messages) {
             if (!msg.message) continue;
