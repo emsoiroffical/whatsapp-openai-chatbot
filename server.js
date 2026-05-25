@@ -148,7 +148,7 @@ app.get('/', (req, res) => {
 });
 
 // Sunucuyu başlat
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n==============================================`);
     console.log(`🚀 Webhook Sunucusu ${PORT} portunda çalışıyor`);
     console.log(`==============================================\n`);
