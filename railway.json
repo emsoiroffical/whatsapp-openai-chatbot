@@ -1,0 +1,24 @@
+{
+  "build": {
+    "command": "npm install"
+  },
+  "services": [
+    {
+      "name": "web",
+      "src": "npm start",
+      "type": "node",
+      "env": {
+        "WAHA_URL": "${WAHA_URL}",
+        "WAHA_API_KEY": "${WAHA_API_KEY}",
+        "WHATSAPP_HOOK_URL": "${WHATSAPP_HOOK_URL}",
+        "WHATSAPP_HOOK_EVENTS": "message.any"
+      },
+      "volumes": [
+        {
+          "path": "/root/.waha",
+          "name": "waha-data"
+        }
+      ]
+    }
+  ]
+}

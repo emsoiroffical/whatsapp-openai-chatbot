@@ -6,6 +6,25 @@ dotenv.config();
 
 const app = express();
 app.use(express.json());
+// Simple rate limiter (max 5 requests per minute per IP)
+const rateLimitMap = new Map();
+app.use((req, res, next) => {
+  const ip = req.ip;
+  const now = Date.now();
+  const record = rateLimitMap.get(ip) || { count: 0, start: now };
+  if (now - record.start > 60000) {
+    // Reset each minute
+    record.count = 0;
+    record.start = now;
+  }
+  record.count++;
+  rateLimitMap.set(ip, record);
+  if (record.count > 5) {
+    console.warn(`⚠️ Rate limit exceeded for ${ip}`);
+    return res.status(429).send('Too Many Requests');
+  }
+  next();
+});
 
 const PORT = process.env.PORT || 3000;
 
@@ -108,22 +127,27 @@ async function sendWahaMessage(chatId, text) {
     }
 
     const endpoint = `${WAHA_URL}/api/sendText`;
-    
+
     const headers = {
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
     };
-    
+
     // WAHA API Key ayarlandıysa ekle
     if (WAHA_API_KEY) {
         headers['X-Api-Key'] = WAHA_API_KEY;
     }
 
-    const body = JSON.stringify({
+    const bodyObj = {
         session: 'default',
         chatId: chatId,
         text: text
-    });
+    };
+
+    // Log request details
+    console.log('🔔 WAHA sendText request:', bodyObj);
+
+    const body = JSON.stringify(bodyObj);
 
     try {
         const response = await fetch(endpoint, {
@@ -131,10 +155,13 @@ async function sendWahaMessage(chatId, text) {
             headers: headers,
             body: body
         });
-        
+
+        const responseData = await response.text();
+        // Log raw response
+        console.log('🔔 WAHA sendText response (status:', response.status, '):', responseData);
+
         if (!response.ok) {
-            const errorData = await response.text();
-            console.error(`❌ WAHA'ya mesaj gönderilemedi. Status: ${response.status}`, errorData);
+            console.error(`❌ WAHA'ya mesaj gönderilemedi. Status: ${response.status}`, responseData);
         } else {
             console.log(`✅ Mesaj WAHA üzerinden gönderildi.`);
         }
@@ -147,10 +174,22 @@ async function sendWahaMessage(chatId, text) {
 app.get('/', (req, res) => {
     res.send('EMSOIR Webhook Sunucusu Aktif ✅');
 });
+// Health endpoint for Railway
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
 
 // Sunucuyu başlat
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n==============================================`);
     console.log(`🚀 Webhook Sunucusu ${PORT} portunda çalışıyor`);
     console.log(`==============================================\n`);
+});
+// Graceful error handling
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection:', reason);
+});
+process.on('uncaughtException', err => {
+  console.error('❌ Uncaught Exception:', err);
+  process.exit(1);
 });
