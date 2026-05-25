@@ -38,7 +38,8 @@ app.post('/webhook', async (req, res) => {
 
     const event = req.body;
     
-    console.log(`\n🔔 [WEBHOOK GELDİ] Event tipi: ${event.event}`);
+    console.log('🔔 [WEBHOOK RAW]', JSON.stringify(req.body, null, 2));
+console.log(`\n🔔 [WEBHOOK GELDİ] Event tipi: ${event.event}`);
     
     // Sadece yeni mesaj olaylarını işle
     if (event.event !== 'message' && event.event !== 'message.any') {
