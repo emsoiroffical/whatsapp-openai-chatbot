@@ -38,9 +38,12 @@ app.post('/webhook', async (req, res) => {
 
     const event = req.body;
     
-    // Sadece yeni mesaj olaylarını işle
-    if (event.event !== 'message') return;
+    console.log(`\n🔔 [WEBHOOK GELDİ] Event tipi: ${event.event}`);
     
+    // Sadece yeni mesaj olaylarını işle
+    if (event.event !== 'message' && event.event !== 'message.any') {
+        return;
+    }
     const payload = event.payload;
     if (!payload) return;
 
